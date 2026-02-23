@@ -1,0 +1,179 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  departments Department[]
+  users       User[]
+  projects    Project[]
+  adminKeys   AdminKey[]
+
+  @@map("tenants")
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  tenantId    String   @map("tenant_id")
+  name        String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  users    User[]
+  projects Project[]
+
+  @@unique([tenantId, name])
+  @@map("departments")
+}
+
+model User {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  departmentId   String?  @map("department_id")
+  email          String   @unique
+  passwordHash   String   @map("password_hash")
+  fullName       String   @map("full_name")
+  role           String   @default("user")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  department    Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  projectAccess UserProjectAccess[]
+
+  @@map("users")
+}
+
+model Project {
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  departmentId String?  @map("department_id")
+  name         String
+  description  String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  department   Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  platformKeys PlatformKey[]
+  userAccess   UserProjectAccess[]
+
+  @@unique([tenantId, name])
+  @@map("projects")
+}
+
+model AdminKey {
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  platform     String   // openai | anthropic | google
+  keyLabel     String   @map("key_label")
+  encryptedKey String   @map("encrypted_key")
+  keyType      String   @default("admin") @map("key_type") // admin | service_account
+  isActive     Boolean  @default(true) @map("is_active")
+  lastSyncedAt DateTime? @map("last_synced_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  discoveredKeys PlatformKey[]
+
+  @@map("admin_keys")
+}
+
+model PlatformKey {
+  id              String   @id @default(uuid())
+  projectId       String   @map("project_id")
+  platform        String   // openai | anthropic | google
+  encryptedKey    String?  @map("encrypted_key")
+  keyLabel        String   @map("key_label")
+  externalKeyId   String?  @map("external_key_id")
+  redactedValue   String?  @map("redacted_value")
+  isActive        Boolean  @default(true) @map("is_active")
+  discoveredViaId String?  @map("discovered_via_id")
+  lastSyncedAt    DateTime? @map("last_synced_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  project          Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  discoveredVia    AdminKey?        @relation(fields: [discoveredViaId], references: [id], onDelete: SetNull)
+  usageRecords     UsageRecord[]
+  billingSnapshots BillingSnapshot[]
+  syncLogs         SyncLog[]
+
+  @@map("platform_keys")
+}
+
+model UsageRecord {
+  id                String   @id @default(uuid())
+  platformKeyId     String   @map("platform_key_id")
+  recordedAt        DateTime @map("recorded_at")
+  model             String
+  inputTokens       Int      @default(0) @map("input_tokens")
+  outputTokens      Int      @default(0) @map("output_tokens")
+  totalTokens       Int      @default(0) @map("total_tokens")
+  costUsd           Float    @default(0) @map("cost_usd")
+  requestCount      Int      @default(0) @map("request_count")
+  userIdExternal    String?  @map("user_id_external")
+  projectIdExternal String?  @map("project_id_external")
+  metadataExtra     Json?    @map("metadata_extra")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  platformKey PlatformKey @relation(fields: [platformKeyId], references: [id], onDelete: Cascade)
+
+  @@unique([platformKeyId, recordedAt, model])
+  @@index([platformKeyId, recordedAt])
+  @@map("usage_records")
+}
+
+model BillingSnapshot {
+  id            String   @id @default(uuid())
+  platformKeyId String   @map("platform_key_id")
+  periodStart   DateTime @map("period_start")
+  periodEnd     DateTime @map("period_end")
+  totalCostUsd  Float    @default(0) @map("total_cost_usd")
+  totalTokens   Int      @default(0) @map("total_tokens")
+  breakdown     Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  platformKey PlatformKey @relation(fields: [platformKeyId], references: [id], onDelete: Cascade)
+
+  @@map("billing_snapshots")
+}
+
+model SyncLog {
+  id            String    @id @default(uuid())
+  platformKeyId String    @map("platform_key_id")
+  syncType      String    @map("sync_type") // manual | auto
+  status        String    // pending | running | success | failed
+  errorMessage  String?   @map("error_message")
+  recordsSynced Int       @default(0) @map("records_synced")
+  startedAt     DateTime  @default(now()) @map("started_at")
+  completedAt   DateTime? @map("completed_at")
+
+  platformKey PlatformKey @relation(fields: [platformKeyId], references: [id], onDelete: Cascade)
+
+  @@index([platformKeyId, startedAt])
+  @@map("sync_logs")
+}
+
+model UserProjectAccess {
+  userId          String @map("user_id")
+  projectId       String @map("project_id")
+  permissionLevel String @default("view") @map("permission_level") // view | manage | admin
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([userId, projectId])
+  @@map("user_project_access")
+}
